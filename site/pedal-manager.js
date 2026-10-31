@@ -555,7 +555,7 @@
     catch (error) { status(error.message, 'danger'); return; }
     const current = readPedalSync().links[number]?.patchId;
     const body = `<p>Link memory ${number} (“${escapeHtml(memory.decoded.name)}”) to an existing My patch. Nothing on the pedal or in My patches changes.</p>
-      <label class="field"><span class="field-label">My patch</span><select class="form-control" id="usb-link-patch">${list.map(entry => `<option value="${escapeHtml(entry.id)}"${entry.id === current ? ' selected' : ''}>${escapeHtml(entry.name)}</option>`).join('')}</select></label>
+      <label class="field"><span class="field-label">My patch</span><select class="form-control" id="usb-link-patch">${list.map(entry => `<option value="${escapeHtml(entry.id)}"${entry.id === current ? ' selected' : ''}>${escapeHtml(entry.name)}${validDate(entry.updatedAt) ? ` — saved ${escapeHtml(when(entry.updatedAt))}` : ''}</option>`).join('')}</select></label>
       <p class="field-hint">If the pedal version differs, it will be marked as changed and you can review it before updating the saved patch.</p>`;
     if (!await confirmWrite(body, 'Link', 'Link memory', false)) return;
     const patchId = $('#usb-link-patch')?.value;
