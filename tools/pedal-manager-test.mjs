@@ -157,6 +157,7 @@ try {
   const page3 = watch(await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage());
   await page3.addInitScript(mockMidi, { source: fakePedal.toString(), patches: [good, other] });
   await page3.addInitScript(() => localStorage.setItem('ms60b-library', JSON.stringify([{ id: 'p1', name: 'My patch', effects: [{ index: 0, on: true, values: {} }], updatedAt: new Date().toISOString() }])));
+  await page3.addInitScript(() => localStorage.setItem('ms60b-builder', JSON.stringify({ name: 'Draft patch', effects: [{ index: 0, on: true, values: {} }] })));
   await page3.addInitScript(() => localStorage.setItem('ms60b-usb-backups', JSON.stringify([null, { id: 'bad', at: 'not-a-date', data: 'not-base64' }])));
   await page3.goto(`http://localhost:${PORT}/ms-60b/pedal-manager.html`);
   await test('corrupted local USB backups are ignored without breaking the manager', async () => {
@@ -168,6 +169,22 @@ try {
     assert.equal(await edit.innerText(), 'Edit');
     assert.match(await edit.getAttribute('href'), /^builder\.html#p=/);
     assert.equal(await edit.evaluate(el => el.nextElementSibling.matches('[data-act="send"]')), true, 'it sits just before the send button');
+  });
+  await test('the open builder draft can be deleted without touching saved patches', async () => {
+    const row = page3.locator('#usb-locals li[data-key="draft"]');
+    const trash = row.locator('[data-act="delete"]');
+    assert.equal(await trash.isEnabled(), true);
+    assert.equal(await trash.getAttribute('title'), 'Delete builder draft');
+    await trash.click();
+    await page3.waitForSelector('#usb-confirm[open]');
+    assert.equal(await page3.locator('#usb-confirm-title').textContent(), 'Delete draft');
+    await page3.click('#usb-confirm-yes');
+    assert.equal(await row.count(), 0);
+    assert.equal(await page3.evaluate(() => localStorage.getItem('ms60b-builder')), null);
+    assert.equal(await page3.locator('#usb-local-count').innerText(), '1');
+    await page3.click('#usb-undo');
+    await row.waitFor();
+    assert.equal(await page3.evaluate(() => JSON.parse(localStorage.getItem('ms60b-builder')).name), 'Draft patch');
   });
   await test('My patches has a trash button before Edit; it asks first and Delete takes the patch out', async () => {
     const row = page3.locator('#usb-locals li[data-key="lib:p1"]');

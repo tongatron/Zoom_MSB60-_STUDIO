@@ -617,6 +617,28 @@
       return { ok: true, text: `“${gone.entry.name}” is back in My patches` };
     }, { toast: true });
   }
+  async function deleteDraft() {
+    const draft = readJson(DRAFT_KEY, null);
+    if (!draft?.effects?.length) return;
+    const name = draft.name || '(no name)';
+    const edit = readJson(EDIT_KEY, null);
+    const yes = await confirmWrite(`<p>Delete the builder draft <b>${escapeHtml(name)}</b>?</p><p>Nothing in My patches or on the pedal changes.</p>`, 'Delete', 'Delete draft');
+    if (!yes) return;
+    try {
+      localStorage.removeItem(DRAFT_KEY);
+      localStorage.removeItem(EDIT_KEY);
+    } catch { status('This browser does not allow this site to delete the builder draft.', 'danger'); return; }
+    renderLocals();
+    status(`“${name}” deleted from the builder`, 'ok');
+    pushUndo(`Deleted builder draft “${name}”`, async () => {
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+        if (edit) localStorage.setItem(EDIT_KEY, JSON.stringify(edit));
+      } catch { return { ok: false, text: 'This browser does not allow this site to restore the builder draft.' }; }
+      renderLocals();
+      return { ok: true, text: `“${name}” is back in the builder` };
+    }, { toast: true });
+  }
 
   // ---- local patches ---------------------------------------------------------------------------------
   // [{ key, name, label, chain, bytes | error }]: the builder's open patch, a chosen .zptc file, then My patches
@@ -653,7 +675,7 @@
         <div class="usb-local-main"><span class="usb-name">${escapeHtml(item.name)}</span><small>${escapeHtml(item.label)}</small>
           <span class="usb-chain-line">${escapeHtml(item.error || chainText(item.chain))}</span></div>
         <span class="usb-local-actions">
-          <button class="btn btn-sm btn-icon btn-invisible btn-danger usb-delete"${item.key.startsWith('lib:') ? ' data-act="delete"' : ' disabled'} aria-label="Delete ${escapeHtml(item.name)} from My patches" title="${item.key.startsWith('lib:') ? 'Delete from My patches' : 'Only saved patches can be deleted'}">${ICON_TRASH}</button>
+          <button class="btn btn-sm btn-icon btn-invisible btn-danger usb-delete"${item.key === 'draft' || item.key.startsWith('lib:') ? ' data-act="delete"' : ' disabled'} aria-label="${item.key === 'draft' ? `Delete ${escapeHtml(item.name)} draft` : `Delete ${escapeHtml(item.name)} from My patches`}" title="${item.key === 'draft' ? 'Delete builder draft' : item.key.startsWith('lib:') ? 'Delete from My patches' : 'Only saved patches can be deleted'}">${ICON_TRASH}</button>
           ${item.href ? `<a class="btn btn-sm usb-edit" href="${escapeHtml(item.href)}" data-act="edit-local" title="Open this patch in the patch builder">Edit</a>` : '<button class="btn btn-sm usb-edit" disabled title="This file cannot be opened in the patch builder">Edit</button>'}
           <button class="btn btn-sm btn-icon usb-send${target ? ' btn-primary' : ''}" data-act="send" ${!connected || !target || item.error || busy ? 'disabled' : ''}
             aria-label="${target ? `Send to memory ${target}` : 'Send to a memory'}"
@@ -663,7 +685,12 @@
   }
   $('#usb-locals').addEventListener('click', event => {
     const trash = event.target.closest('[data-act="delete"]');
-    if (trash) { deletePatch(trash.closest('[data-key]').dataset.key.slice('lib:'.length)); return; }
+    if (trash) {
+      const key = trash.closest('[data-key]').dataset.key;
+      if (key === 'draft') deleteDraft();
+      else if (key.startsWith('lib:')) deletePatch(key.slice('lib:'.length));
+      return;
+    }
     const button = event.target.closest('[data-act="send"]');
     if (!button || !selected) return;
     const item = localItems().find(i => i.key === button.closest('[data-key]').dataset.key);
