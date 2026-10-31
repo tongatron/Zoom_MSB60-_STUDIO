@@ -216,6 +216,13 @@ try {
     await page3.click('#usb-connect');
     await page3.locator('#usb-memories li[data-state="ok"]').first().waitFor({ timeout: 20000 });
     await page3.locator('#usb-memories li[data-n="1"] .usb-mem-main').click();
+    await page3.locator('#usb-memories li[data-n="1"] [data-act="link"]').click();
+    await page3.selectOption('#usb-link-patch', 'p1');
+    await page3.click('#usb-confirm-yes');
+    assert.equal(await page3.evaluate(() => JSON.parse(localStorage.getItem('ms60b-pedal-sync')).links[1].patchId), 'p1');
+    assert.equal(await page3.locator('#usb-memories li[data-n="1"] [data-act="link"]').innerText(), 'Change My patch link');
+    await page3.locator('#usb-memories li[data-n="1"] .usb-mem-main').click();
+    await page3.locator('#usb-memories li[data-n="1"] .usb-mem-main').click();
     await page3.locator('#usb-memories li[data-n="1"] [data-act="copy"]').click();
     assert.equal(await page3.locator('#usb-local-count').innerText(), '2');
     const copiedId = await page3.evaluate(() => JSON.parse(localStorage.getItem('ms60b-library')).find(p => p.id !== 'p1').id);

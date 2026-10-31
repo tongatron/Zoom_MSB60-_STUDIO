@@ -301,6 +301,8 @@
     const m = memories.get(n) || { state: 'loading' };
     const d = m.decoded;
     const linked = m.state === 'ok' && m.crcOk ? syncInfo(n) : null;
+    const linkedPatch = readPedalSync().links[n]?.patchId;
+    const linkLabel = linkedPatch ? 'Change My patch link' : 'Link to My patch';
     const isSelected = n === selected;
     const name = m.state === 'ok' ? d.name || '(no name)' : m.state === 'loading' ? 'Reading…' : m.state === 'empty' ? '(empty)' : `Unreadable: ${m.error}`;
     const meta = m.state === 'ok' ? `${d.effects.length} fx · ${d.dspTotal.toFixed(1)}%${linked && !linked.error ? ' · changed' : ''}` : '';
@@ -327,6 +329,7 @@
         </form>` : ''}
         <div class="usb-row">
           <a class="btn btn-sm btn-primary" href="${PATCHLINK.url(toPatch(d))}&m=${n}" data-act="edit">Edit in builder</a>
+          <button class="btn btn-sm" data-act="link">${linkLabel}</button>
           <button class="btn btn-sm" data-act="rename" ${connected && !busy && m.crcOk ? '' : 'disabled'}>Rename</button>
           <button class="btn btn-sm" data-act="copy">Copy to My patches</button>
           <button class="btn btn-sm" data-act="download">Download .zptc</button>
@@ -404,6 +407,7 @@
         break;
       }
       case 'select': renaming = null; select(n); break;
+      case 'link': await linkExistingMemory(n); break;
       case 'edit': // remember where the patch comes from, so the builder can send it back to this memory
         try { localStorage.setItem(EDIT_KEY, JSON.stringify({ memory: n, name: m.decoded.name, base: toBase64(m.data), at: new Date().toISOString(), pending: true })); } catch {}
         break;
@@ -540,6 +544,30 @@
     if (!sync.links[number]) return;
     delete sync.links[number];
     writePedalSync(sync);
+  }
+  async function linkExistingMemory(number) {
+    const memory = memories.get(number);
+    if (memory?.state !== 'ok' || !memory.crcOk) { status('Read the memory correctly before linking it to My patches.', 'danger'); return; }
+    const list = readLibrary();
+    if (!list.length) { status('There are no My patches to link.', 'danger'); return; }
+    let pedalPatch;
+    try { pedalPatch = toPatch(memory.decoded, { strict: true }); }
+    catch (error) { status(error.message, 'danger'); return; }
+    const current = readPedalSync().links[number]?.patchId;
+    const body = `<p>Link memory ${number} (“${escapeHtml(memory.decoded.name)}”) to an existing My patch. Nothing on the pedal or in My patches changes.</p>
+      <label class="field"><span class="field-label">My patch</span><select class="form-control" id="usb-link-patch">${list.map(entry => `<option value="${escapeHtml(entry.id)}"${entry.id === current ? ' selected' : ''}>${escapeHtml(entry.name)}</option>`).join('')}</select></label>
+      <p class="field-hint">If the pedal version differs, it will be marked as changed and you can review it before updating the saved patch.</p>`;
+    if (!await confirmWrite(body, 'Link', 'Link memory', false)) return;
+    const patchId = $('#usb-link-patch')?.value;
+    const entry = list.find(item => item.id === patchId);
+    if (!entry) { status('The selected My patch is no longer available.', 'danger'); return; }
+    const baseline = canonicalPatch(patchForEntry(entry));
+    const sync = readPedalSync();
+    sync.links[number] = { patchId: entry.id, pedalBaseline: baseline, libraryBaseline: baseline, updatedAt: new Date().toISOString() };
+    if (!writePedalSync(sync)) return;
+    renderMemories();
+    status(`Memory ${number} linked to “${entry.name}”`, 'ok');
+    if (pedalSyncEnabled()) await offerLinkedChanges([number]);
   }
   function remapLinksAfterArrange(plan) {
     const sync = readPedalSync();
@@ -1022,11 +1050,13 @@
   });
 
   // Resolves true when the user confirms
-  function confirmWrite(html, action, title = 'Write to the pedal') {
+  function confirmWrite(html, action, title = 'Write to the pedal', danger = true) {
     const dialog = $('#usb-confirm');
     $('#usb-confirm-title').textContent = title;
     $('#usb-confirm-body').innerHTML = html;
     $('#usb-confirm-yes').textContent = action;
+    $('#usb-confirm-yes').classList.toggle('btn-danger', danger);
+    $('#usb-confirm-yes').classList.toggle('btn-primary', !danger);
     $('#usb-confirm-keep').hidden = true;
     $('#usb-confirm-new').hidden = true;
     dialog.showModal();
@@ -1051,6 +1081,8 @@
       <ul>${changes || '<li>The patch content changed.</li>'}${more}</ul>
       <p>Choose whether to replace the saved patch, keep it, or save the pedal version as a new patch.</p>`;
     $('#usb-confirm-yes').textContent = 'Update My patch';
+    $('#usb-confirm-yes').classList.add('btn-danger');
+    $('#usb-confirm-yes').classList.remove('btn-primary');
     $('#usb-confirm-keep').hidden = false;
     $('#usb-confirm-new').hidden = false;
     dialog.showModal();
