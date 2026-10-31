@@ -851,6 +851,8 @@ body.is-dropping .drop-overlay { display: grid; }
 .usb-local-main { min-width: 0; }
 .usb-local-main small { margin-left: 8px; color: var(--fg-subtle); font-size: 12px; }
 .usb-local .btn { flex: none; }
+.usb-sync-option { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border-muted); color: var(--fg-muted); font-size: 13px; }
+.usb-sync-option input { margin: 0; }
 .usb-local-actions { display: flex; align-items: center; gap: 6px; flex: none; }
 .usb-edit { height: 32px; }
 .usb-empty { padding: 12px 16px; color: var(--fg-muted); font-size: 13px; }

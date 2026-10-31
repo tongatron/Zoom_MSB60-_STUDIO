@@ -11,6 +11,7 @@
   const DELETED_KEY = `${PEDAL.id}-deleted`; // { patchId: ISO time }: deletions waiting to reach other devices, kept by the builder too
   const DRAFT_KEY = `${PEDAL.id}-builder`;
   const EDIT_KEY = `${PEDAL.id}-pedal-edit`; // { memory, name, base: base64 PTCF, at } while a memory is edited in the builder
+  const PEDAL_SYNC_KEY = `${PEDAL.id}-pedal-sync`; // { enabled, links: { memory: { patchId, pedalBaseline, libraryBaseline } } }
   const CLEARED_NAME = 'Empty'; // name of a cleared memory: no effects, only the BLANK slot
   // [{ id, memory, name, at, data: base64 of the whole memory }], newest first. A deleted backup stays as { id, deleted: true, at }
   // for 90 days, so that an account does not bring it back (backups are only ever added when two copies are merged)
@@ -111,10 +112,13 @@
   }).join('')}</ol>` : '<p class="usb-chain-line">No effects.</p>';
 
   // Decoded PTCF → builder patch: { name, effects: [{ index, on, values }] }
-  function toPatch(decoded) {
+  function toPatch(decoded, { strict = false } = {}) {
     const effects = decoded.effects.flatMap(e => {
       const index = EFFECTS_DATA.findIndex(fx => fx[0] === e.effect);
-      if (index === -1) return [];
+      if (index === -1) {
+        if (strict) throw new Error(`The pedal patch contains an effect not available in My patches: ${e.effect}`);
+        return [];
+      }
       const values = Object.fromEntries(Object.entries(e.params).map(([n, v]) => [n, v && typeof v === 'object' ? v.raw : v]));
       return [{ index, on: e.on, values }];
     });
@@ -162,6 +166,7 @@
     renderMemories();
     renderLocals();
     renderBackups();
+    syncSettingText();
   }
 
   // The page is a new page each time the visitor goes elsewhere in the site, so the connection is made again by itself
@@ -262,6 +267,7 @@
     renderLocals();
     const failed = [...memories.values()].filter(m => m.state === 'error').length;
     status(failed ? `Connected: ${failed} of ${info.count} memories with errors (see the MIDI log)` : 'Connected', failed ? 'danger' : 'ok');
+    await offerLinkedChanges(Array.from({ length: info.count }, (_, i) => i + 1));
     if (pendingSend) sendPending();
   }
   function sendPending() {
@@ -288,14 +294,16 @@
     if (m?.state === 'ok' && m.crcOk) result(true, `Memory ${n} read again successfully. You can arrange again.`);
     else result(false, `Memory ${n} still needs to be read correctly.`, { type: 'reread', memory: n });
     status(m?.state === 'ok' && m.crcOk ? `Memory ${n} read again` : `Memory ${n} needs to be read again`, m?.state === 'ok' && m.crcOk ? 'ok' : 'danger');
+    await offerLinkedChanges([n]);
   });
 
   function memoryHtml(n) {
     const m = memories.get(n) || { state: 'loading' };
     const d = m.decoded;
+    const linked = m.state === 'ok' && m.crcOk ? syncInfo(n) : null;
     const isSelected = n === selected;
     const name = m.state === 'ok' ? d.name || '(no name)' : m.state === 'loading' ? 'Reading…' : m.state === 'empty' ? '(empty)' : `Unreadable: ${m.error}`;
-    const meta = m.state === 'ok' ? `${d.effects.length} fx · ${d.dspTotal.toFixed(1)}%` : '';
+    const meta = m.state === 'ok' ? `${d.effects.length} fx · ${d.dspTotal.toFixed(1)}%${linked && !linked.error ? ' · changed' : ''}` : '';
     const drag = canArrange() && renaming !== n;
     return `<li class="usb-mem${isSelected ? ' is-selected' : ''}${drag ? ' is-draggable' : ''}" data-n="${n}" data-state="${m.state}"${drag ? ' draggable="true"' : ''}>
       <button class="usb-mem-main" data-act="select" aria-pressed="${isSelected}" ${m.state === 'loading' ? 'disabled' : ''}>
@@ -310,6 +318,7 @@
       </div>` : ''}
       ${isSelected && m.state === 'ok' ? `<div class="usb-mem-detail">
         ${m.crcOk ? '' : `<p class="usb-warn">The pedal sent this memory with a checksum mismatch: it is shown, but it cannot be renamed, moved or replaced until it is read correctly.</p><div class="usb-row"><button class="btn btn-sm btn-warning usb-read-again" data-act="reread" ${connected && !busy ? '' : 'disabled'}>Read again</button></div>`}
+        ${linked?.error ? `<p class="usb-warn">This linked patch cannot be updated: ${escapeHtml(linked.error)}</p>` : linked ? `<p class="usb-warn">This memory changed since it was last linked to <b>${escapeHtml(linked.entry.name)}</b>.</p><div class="usb-row"><button class="btn btn-sm btn-primary" data-act="sync">Review changes</button></div>` : ''}
         ${chainCards(d)}
         ${renaming === n ? `<form class="usb-row usb-rename" data-rename="${n}">
           <label>New name <input class="form-control form-control--sm" name="name" maxlength="28" value="${escapeHtml(d.name)}" required spellcheck="false" autocomplete="off" /></label>
@@ -403,12 +412,14 @@
       case 'download': download(m.data, `${String(n).padStart(3, '0')} ${fileName(m.decoded.name)}.zptc`); break;
       case 'clear': send(n, ZPTC.encode({ name: CLEARED_NAME, empty: true, effects: [] }).file, true); break;
       case 'reread': await readOne(n); renderMemory(n); status(`Memory ${n} read again`, 'ok'); break;
+      case 'sync': await syncMemory(n); break;
       case 'copy': {
         const patch = toPatch(m.decoded);
         const list = readLibrary();
         const entry = { id: `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, name: freeName(patch.name, list), effects: patch.effects, output: null, updatedAt: new Date().toISOString() };
         list.unshift(entry);
         if (!storeLibrary(list)) return;
+        linkMemory(n, entry.id, patch);
         renderLocals();
         status(`“${entry.name}” copied to My patches`, 'ok');
         pushUndo(`Copied “${entry.name}” to My patches`, async () => {
@@ -461,6 +472,90 @@
     if (typeof ACCOUNT !== 'undefined') ACCOUNT.changed();
     return true;
   }
+
+  // ---- pedal → My patches links ---------------------------------------------------------------------
+  // The association is deliberately local: memory 12 belongs to this physical pedal, not to every
+  // device where the account's patch library is synced.
+  function readPedalSync() {
+    const saved = readJson(PEDAL_SYNC_KEY, {});
+    const links = saved && typeof saved.links === 'object' && !Array.isArray(saved.links) ? saved.links : {};
+    return { enabled: saved?.enabled === true, links };
+  }
+  function writePedalSync(sync) {
+    try { localStorage.setItem(PEDAL_SYNC_KEY, JSON.stringify(sync)); return true; }
+    catch { status('This browser does not allow pedal sync settings to be saved.', 'danger'); return false; }
+  }
+  const pedalSyncEnabled = () => readPedalSync().enabled;
+  const patchForEntry = entry => ({ name: entry.name, effects: entry.effects || [] });
+  function canonicalPatch(patch) {
+    return JSON.stringify({
+      name: String(patch.name || ''),
+      effects: (patch.effects || []).map(effect => ({
+        index: effect.index,
+        on: effect.on !== false,
+        values: Object.fromEntries(Object.entries(effect.values || {}).sort(([a], [b]) => a.localeCompare(b)))
+      }))
+    });
+  }
+  function patchDiff(from, to) {
+    const changes = [];
+    if (String(from.name || '') !== String(to.name || '')) changes.push(`name: “${from.name || '(empty)'}” → “${to.name || '(empty)'}”`);
+    const max = Math.max(from.effects?.length || 0, to.effects?.length || 0);
+    for (let i = 0; i < max; i++) {
+      const a = from.effects?.[i], b = to.effects?.[i];
+      if (!a || !b) { changes.push(`effect ${i + 1}: ${a ? 'removed' : 'added'}`); continue; }
+      const aName = EFFECTS_DATA[a.index]?.[0] || `effect ${a.index}`;
+      const bName = EFFECTS_DATA[b.index]?.[0] || `effect ${b.index}`;
+      if (aName !== bName) { changes.push(`effect ${i + 1}: ${aName} → ${bName}`); continue; }
+      if ((a.on !== false) !== (b.on !== false)) changes.push(`${aName}: ${b.on === false ? 'turned off' : 'turned on'}`);
+      const params = new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})]);
+      for (const name of params) if (JSON.stringify(a.values?.[name]) !== JSON.stringify(b.values?.[name])) changes.push(`${aName} ${name}: changed`);
+    }
+    return { count: changes.length, changes };
+  }
+  function syncInfo(number) {
+    const link = readPedalSync().links[number];
+    if (!link?.patchId || !link.pedalBaseline) return null;
+    const entry = readLibrary().find(item => item.id === link.patchId);
+    const memory = memories.get(number);
+    if (!entry || memory?.state !== 'ok' || !memory.crcOk) return null;
+    let pedalPatch;
+    try { pedalPatch = toPatch(memory.decoded, { strict: true }); }
+    catch (error) { return { error: error.message, link, entry }; }
+    if (canonicalPatch(pedalPatch) === link.pedalBaseline) return null;
+    const libraryPatch = patchForEntry(entry);
+    return {
+      number, link, entry, pedalPatch, libraryPatch,
+      changes: patchDiff(libraryPatch, pedalPatch),
+      conflict: link.libraryBaseline && canonicalPatch(libraryPatch) !== link.libraryBaseline
+    };
+  }
+  function linkMemory(number, patchId, patch, libraryPatch = patch) {
+    const sync = readPedalSync();
+    sync.links[number] = { patchId, pedalBaseline: canonicalPatch(patch), libraryBaseline: canonicalPatch(libraryPatch), updatedAt: new Date().toISOString() };
+    writePedalSync(sync);
+  }
+  function unlinkMemory(number) {
+    const sync = readPedalSync();
+    if (!sync.links[number]) return;
+    delete sync.links[number];
+    writePedalSync(sync);
+  }
+  function remapLinksAfterArrange(plan) {
+    const sync = readPedalSync();
+    const links = {};
+    Object.entries(sync.links).forEach(([memory, link]) => {
+      const from = Number(memory);
+      const target = plan.indexOf(from);
+      if (target >= 0) links[target + 1] = link;
+    });
+    sync.links = links;
+    writePedalSync(sync);
+  }
+  function syncSettingText() {
+    const input = $('#usb-sync-changes');
+    if (input) input.checked = pedalSyncEnabled();
+  }
   // A name that no patch in the list has yet: "Name", then "Name 2", "Name 3"…
   function freeName(name, list) {
     const taken = new Set(list.map(e => String(e.name).toLowerCase()));
@@ -506,7 +601,7 @@
         const edit = key === 'draft' ? activeEdit() : null;
         // The builder already holds its own patch (draft); the others open in it through a patch link
         const href = key === 'draft' ? 'builder.html' : PATCHLINK.url(patch);
-        try { items.push({ key, label, href, name: patch.name || '(no name)', chain, bytes: toFile(patch, edit?.memory ? fromBase64(edit.base) : null), memory: edit?.memory ?? null }); }
+        try { items.push({ key, label, href, name: patch.name || '(no name)', chain, bytes: toFile(patch, edit?.memory ? fromBase64(edit.base) : null), memory: edit?.memory ?? null, patchId: key.startsWith('lib:') ? key.slice('lib:'.length) : null }); }
         catch (error) { items.push({ key, label, href, name: patch.name || '(no name)', chain, error: error.message }); }
       } catch {}
     };
@@ -544,7 +639,13 @@
     const button = event.target.closest('[data-act="send"]');
     if (!button || !selected) return;
     const item = localItems().find(i => i.key === button.closest('[data-key]').dataset.key);
-    if (item?.bytes) send(selected, item.bytes);
+    if (item?.bytes) send(selected, item.bytes, false, '', item.patchId || null);
+  });
+  $('#usb-sync-changes').addEventListener('change', event => {
+    const sync = readPedalSync();
+    sync.enabled = event.target.checked;
+    if (!writePedalSync(sync)) event.target.checked = !event.target.checked;
+    if (event.target.checked) offerLinkedChanges(Array.from({ length: info?.count || 0 }, (_, i) => i + 1));
   });
   $('#usb-file').addEventListener('change', async event => {
     const file = event.target.files[0];
@@ -913,6 +1014,7 @@
       }
     }
     result(true, `New order written: ${changes.length} ${changes.length === 1 ? 'memory' : 'memories'}, each read back and identical.`);
+    remapLinksAfterArrange(plan);
     status('Arranged', 'ok');
     pushUndo(`Rearranged ${changes.length} ${changes.length === 1 ? 'memory' : 'memories'}`,
       () => undoWrites(changes.map(c => ({ number: c.to, before: snap.get(c.to).memory, name: snap.get(c.to).name, wrote: ptcfOf(snap.get(c.from).memory) }))), { needsPedal: true });
@@ -925,6 +1027,8 @@
     $('#usb-confirm-title').textContent = title;
     $('#usb-confirm-body').innerHTML = html;
     $('#usb-confirm-yes').textContent = action;
+    $('#usb-confirm-keep').hidden = true;
+    $('#usb-confirm-new').hidden = true;
     dialog.showModal();
     return new Promise(resolve => {
       dialog.onclick = event => {
@@ -935,6 +1039,100 @@
       };
       dialog.oncancel = () => resolve(false);
     });
+  }
+
+  function confirmSync(info) {
+    const dialog = $('#usb-confirm');
+    const changes = info.changes.changes.slice(0, 10).map(change => `<li>${escapeHtml(change)}</li>`).join('');
+    const more = info.changes.count > 10 ? `<li>and ${info.changes.count - 10} more changes</li>` : '';
+    $('#usb-confirm-title').textContent = 'Update My patch';
+    $('#usb-confirm-body').innerHTML = `<p>Memory ${info.number} has changed on the pedal since it was linked to <b>${escapeHtml(info.entry.name)}</b>.</p>
+      ${info.conflict ? '<p class="usb-warn">The copy in My patches has also changed since the last link. Updating will replace that copy with the pedal version.</p>' : ''}
+      <ul>${changes || '<li>The patch content changed.</li>'}${more}</ul>
+      <p>Choose whether to replace the saved patch, keep it, or save the pedal version as a new patch.</p>`;
+    $('#usb-confirm-yes').textContent = 'Update My patch';
+    $('#usb-confirm-keep').hidden = false;
+    $('#usb-confirm-new').hidden = false;
+    dialog.showModal();
+    return new Promise(resolve => {
+      dialog.onclick = event => {
+        const choice = event.target.closest('[data-confirm]')?.dataset.confirm;
+        if (!choice && event.target !== dialog) return;
+        dialog.close();
+        resolve(choice || 'no');
+      };
+      dialog.oncancel = () => resolve('no');
+    });
+  }
+
+  function cloneJson(value) { return JSON.parse(JSON.stringify(value)); }
+  function restoreLibraryEntry(before, beforeSync) {
+    const list = readLibrary();
+    const index = list.findIndex(entry => entry.id === before.id);
+    if (index === -1) list.unshift(before);
+    else list[index] = before;
+    if (!storeLibrary(list)) return false;
+    writePedalSync(beforeSync);
+    renderLocals();
+    renderMemories();
+    return true;
+  }
+  async function syncMemory(number, provided = null) {
+    const found = provided || syncInfo(number);
+    if (!found) return;
+    if (found.error) { status(found.error, 'danger'); return; }
+    const choice = await confirmSync(found);
+    if (choice === 'no') { status('Nothing changed'); return; }
+    const beforeSync = cloneJson(readPedalSync());
+    const before = cloneJson(found.entry);
+    const list = readLibrary();
+    const entry = list.find(item => item.id === found.entry.id);
+    if (!entry) { status('The linked patch is no longer in My patches.', 'danger'); return; }
+    if (choice === 'new') {
+      const copy = { id: `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+        name: freeName(found.pedalPatch.name, list), effects: cloneJson(found.pedalPatch.effects), output: null, updatedAt: new Date().toISOString() };
+      list.unshift(copy);
+      if (!storeLibrary(list)) return;
+      linkMemory(number, copy.id, found.pedalPatch);
+      renderLocals();
+      renderMemories();
+      status(`“${copy.name}” saved as a new My patch`, 'ok');
+      pushUndo(`Saved “${copy.name}” as a new My patch`, async () => {
+        const now = readLibrary();
+        if (!storeLibrary(now.filter(item => item.id !== copy.id))) return { ok: false, text: 'This browser does not allow this site to store data.' };
+        writePedalSync(beforeSync);
+        renderLocals();
+        renderMemories();
+        return { ok: true, text: `“${copy.name}” removed from My patches` };
+      }, { toast: true });
+      return;
+    }
+    if (choice === 'keep') {
+      const sync = readPedalSync();
+      sync.links[number] = { ...found.link, pedalBaseline: canonicalPatch(found.pedalPatch), libraryBaseline: canonicalPatch(patchForEntry(entry)), updatedAt: new Date().toISOString() };
+      writePedalSync(sync);
+      renderMemories();
+      status(`Kept “${entry.name}” in My patches`, 'ok');
+      return;
+    }
+    Object.assign(entry, { name: found.pedalPatch.name, effects: cloneJson(found.pedalPatch.effects), updatedAt: new Date().toISOString() });
+    if (!storeLibrary(list)) return;
+    linkMemory(number, entry.id, found.pedalPatch);
+    renderLocals();
+    renderMemories();
+    status(`Updated “${entry.name}” from memory ${number}`, 'ok');
+    pushUndo(`Updated “${entry.name}” from the pedal`, async () => {
+      const restored = restoreLibraryEntry(before, beforeSync);
+      return { ok: restored, text: restored ? `“${before.name}” restored in My patches` : 'This browser does not allow this site to save the previous patch.' };
+    }, { toast: true });
+  }
+
+  async function offerLinkedChanges(numbers) {
+    if (!pedalSyncEnabled()) return;
+    for (const number of numbers) {
+      const found = syncInfo(number);
+      if (found && !found.error) await syncMemory(number, found);
+    }
   }
 
   // Writes bytes to a memory, reads it back into the list and compares the PTCF data
@@ -952,13 +1150,13 @@
   }
 
   // label: what the change is called on the Undo list (a rename passes its own)
-  async function send(number, bytes, clearing = false, label = '') {
+  async function send(number, bytes, clearing = false, label = '', sourcePatchId = null) {
     if (busy) return;
     busy = true;
     renderLocals();
-    try { await sendNow(number, bytes, clearing, label); } finally { busy = false; renderLocals(); }
+    try { await sendNow(number, bytes, clearing, label, sourcePatchId); } finally { busy = false; renderLocals(); }
   }
-  async function sendNow(number, bytes, clearing = false, label = '') {
+  async function sendNow(number, bytes, clearing = false, label = '', sourcePatchId = null) {
     result(true, '');
     let d;
     try { d = ZPTC.decode(bytes); } catch (error) { status(`Not a patch: ${error.message}`, 'danger'); return; }
@@ -994,6 +1192,10 @@
     const r = await writeAndCheck(number, bytes);
     result(r.ok, r.text);
     status(r.ok ? (clearing ? 'Cleared' : 'Written') : 'Check the pedal', r.ok ? 'ok' : 'danger');
+    if (r.ok && sourcePatchId) {
+      try { linkMemory(number, sourcePatchId, toPatch(ZPTC.decode(ptcfOf(bytes)), { strict: true })); renderMemory(number); }
+      catch (error) { status(`Written, but the My patch link could not be saved: ${error.message}`, 'danger'); }
+    } else if (r.ok && clearing) { unlinkMemory(number); renderMemory(number); }
     // A memory that could not be read as a valid patch is only kept in Backups: writing its raw bytes back cannot be read back to check
     if (r.ok && readable) pushUndo(label || (clearing ? `Cleared memory ${number}` : `Wrote “${d.name}” to memory ${number}`),
       () => undoWrites([{ number, before: old.memory, name: oldName, wrote: ptcfOf(bytes) }]), { needsPedal: true });

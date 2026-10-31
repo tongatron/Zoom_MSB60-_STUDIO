@@ -24,7 +24,7 @@
     <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
     <link rel="manifest" href="../manifest.webmanifest" />
     <link rel="apple-touch-icon" href="../apple-touch-icon.png" />
-    <link rel="stylesheet" href="../styles.css?v=zoom72-20261031" />
+    <link rel="stylesheet" href="../styles.css?v=zoom73-20261031" />
     <link rel="stylesheet" href="../theme.css?v=zoom48-20261027" />
     <link rel="stylesheet" href="../fullscreen.css?v=fs33-20261030" />
       <script defer src="https://analytics.tongatron.org/script.js" data-website-id="b2709fd6-df71-4f36-9439-89654b04f57e"></script>
@@ -141,6 +141,7 @@
           </div>
         </div>
         <p class="field-hint usb-hint">Select a slot on the pedal to load a patch.</p>
+        <label class="usb-sync-option"><input type="checkbox" id="usb-sync-changes" /> Ask before updating My patches when a linked pedal memory changes</label>
         <ul class="usb-locals" id="usb-locals" tabindex="0" aria-label="My patches"></ul>
       </section>
     </main>
@@ -149,7 +150,7 @@
       <a class="fs-b3" href="https://tongatron.org" target="_blank" rel="noreferrer" title="tongatron.org"><span class="fs-b3-dot" aria-hidden="true"></span>tongatron.org</a>
       <a href="https://github.com/tongatron/ZOOM-MultiStomp-Patch-Studio" target="_blank" rel="noreferrer">Source on GitHub</a>
       <a href="../privacy.html">Privacy</a>
-      <time class="gh-updated" datetime="2026-10-31T01:19Z">Last update 31 October 2026 02:19</time>
+      <time class="gh-updated" datetime="2026-10-31T18:47Z">Last update 31 October 2026 19:47</time>
     </footer>
 
     <dialog class="Overlay Overlay--small" id="usb-confirm" aria-labelledby="usb-confirm-title">
@@ -157,6 +158,8 @@
       <div class="Overlay-body" id="usb-confirm-body"></div>
       <div class="usb-row usb-confirm-actions">
         <button class="btn btn-sm" data-confirm="no">Cancel</button>
+        <button class="btn btn-sm" data-confirm="keep" id="usb-confirm-keep" hidden>Keep My patch</button>
+        <button class="btn btn-sm" data-confirm="new" id="usb-confirm-new" hidden>Save as new</button>
         <button class="btn btn-sm btn-danger" data-confirm="yes" id="usb-confirm-yes">Write</button>
       </div>
     </dialog>
@@ -169,7 +172,7 @@
     <script src="../patch-link.js?v=zoom24-20261026"></script>
     <script src="../pedal-midi.js?v=zoom24-20261026"></script>
     <script src="../dialogs.js?v=dialogs1-20261030"></script>
-    <script src="../pedal-manager.js?v=zoom63-20261031"></script>
+    <script src="../pedal-manager.js?v=zoom64-20261031"></script>
     <script src="../library-merge.js?v=zoom29-20261028"></script>
     <script src="../account.js?v=zoom52-20261030"></script>
     <script src="../report.js?v=report6-20261029"></script>

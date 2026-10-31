@@ -1,6 +1,6 @@
 // Pedal manager in a real browser against the simulated pedal: Clear patch on a readable memory and on a memory the
 // page cannot decode (it proposes the name Empty, keeps a backup first), the delete button of My patches, Undo (patches, writes to
-// the pedal, the moves of a new order) and no native browser dialog anywhere. Run: PW_CHANNEL=chrome node tools/pedal-manager-test.mjs
+// the pedal, the moves of a new order, and pedal → My patches update confirmation) and no native browser dialog anywhere. Run: PW_CHANNEL=chrome node tools/pedal-manager-test.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -218,6 +218,18 @@ try {
     await page3.locator('#usb-memories li[data-n="1"] .usb-mem-main').click();
     await page3.locator('#usb-memories li[data-n="1"] [data-act="copy"]').click();
     assert.equal(await page3.locator('#usb-local-count').innerText(), '2');
+    const copiedId = await page3.evaluate(() => JSON.parse(localStorage.getItem('ms60b-library')).find(p => p.id !== 'p1').id);
+    await page3.evaluate(id => localStorage.setItem('ms60b-pedal-sync', JSON.stringify({ enabled: false, links: { 1: { patchId: id, pedalBaseline: 'changed', libraryBaseline: 'changed' } } })), copiedId);
+    await page3.locator('#usb-memories li[data-n="1"] .usb-mem-main').click();
+    await page3.locator('#usb-memories li[data-n="1"] .usb-mem-main').click();
+    await page3.locator('#usb-memories li[data-n="1"] [data-act="sync"]').click();
+    await page3.waitForSelector('#usb-confirm[open]');
+    assert.equal(await page3.locator('#usb-confirm-title').innerText(), 'Update My patch');
+    await page3.click('#usb-confirm-yes');
+    await page3.waitForFunction(id => JSON.parse(localStorage.getItem('ms60b-pedal-sync')).links[1].patchId === id, copiedId);
+    assert.match(await page3.locator('#usb-status').innerText(), /Updated/);
+    await page3.click('#usb-undo');
+    await page3.waitForFunction(id => JSON.parse(localStorage.getItem('ms60b-pedal-sync')).links[1].pedalBaseline === 'changed', copiedId);
     assert.match(await page3.locator('#usb-undo-text').innerText(), /^Copied “.+” to My patches$/);
     await page3.click('#usb-undo');
     assert.equal(await page3.locator('#usb-local-count').innerText(), '1');
